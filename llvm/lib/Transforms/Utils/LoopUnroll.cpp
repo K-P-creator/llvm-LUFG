@@ -456,33 +456,41 @@ static bool canHaveUnrollRemainder(const Loop *L) {
 ///
 /// If RemainderLoop is non-null, it will receive the remainder loop (if
 /// required and not fully unrolled).
+
+/// Optional parameter I added - reference to a bool that lets my MyTryToUnroll
+/// function know if the unroll succeeded with the forced unroll count
+#define INVALIDATE_LOOP if(loopValid != nullptr) *loopValid = false
 LoopUnrollResult
 llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
                  ScalarEvolution *SE, DominatorTree *DT, AssumptionCache *AC,
                  const TargetTransformInfo *TTI, OptimizationRemarkEmitter *ORE,
-                 bool PreserveLCSSA, Loop **RemainderLoop, AAResults *AA) {
+                 bool PreserveLCSSA, Loop **RemainderLoop, AAResults *AA,
+                 bool* loopValid) {
   assert(DT && "DomTree is required");
 
   if (!L->getLoopPreheader()) {
     LLVM_DEBUG(dbgs() << "  Can't unroll; loop preheader-insertion failed.\n");
+    INVALIDATE_LOOP;
     return LoopUnrollResult::Unmodified;
   }
 
   if (!L->getLoopLatch()) {
     LLVM_DEBUG(dbgs() << "  Can't unroll; loop exit-block-insertion failed.\n");
+    INVALIDATE_LOOP;
     return LoopUnrollResult::Unmodified;
   }
 
   // Loops with indirectbr cannot be cloned.
   if (!L->isSafeToClone()) {
     LLVM_DEBUG(dbgs() << "  Can't unroll; Loop body cannot be cloned.\n");
+    INVALIDATE_LOOP;
     return LoopUnrollResult::Unmodified;
   }
 
   if (L->getHeader()->hasAddressTaken()) {
     // The loop-rotate pass can be helpful to avoid this in many cases.
-    LLVM_DEBUG(
-        dbgs() << "  Won't unroll loop: address of header block is taken.\n");
+    LLVM_DEBUG(dbgs() << "  Won't unroll loop: address of header block is taken.\n");
+    INVALIDATE_LOOP;
     return LoopUnrollResult::Unmodified;
   }
 
@@ -580,8 +588,8 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   bool LatchIsExiting = L->isLoopExiting(LatchBlock);
   if (!isa<UncondBrInst>(LatchTerm) &&
       !(isa<CondBrInst>(LatchTerm) && LatchIsExiting)) {
-    LLVM_DEBUG(
-        dbgs() << "Can't unroll; a conditional latch must exit the loop");
+    LLVM_DEBUG(dbgs() << "Can't unroll; a conditional latch must exit the loop");
+    INVALIDATE_LOOP;
     return LoopUnrollResult::Unmodified;
   }
 
@@ -603,6 +611,7 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
     else {
       LLVM_DEBUG(dbgs() << "Won't unroll; remainder loop could not be "
                            "generated when assuming runtime trip count\n");
+      INVALIDATE_LOOP;
       return LoopUnrollResult::Unmodified;
     }
   }

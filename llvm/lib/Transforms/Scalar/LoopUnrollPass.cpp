@@ -1,3 +1,4 @@
+#define PRESET_LOOP_UNROLL_FACTOR_FOR_UNKNOWN_TRIP_COUNT 2
 //===- LoopUnroll.cpp - Loop unroller pass --------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -59,6 +60,14 @@
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
+
+//  My includes 
+#include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -71,6 +80,424 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "loop-unroll"
+
+#define MY_DEBUG(X) LLVM_DEBUG(dbgs() << "MY_DEBUG: " <<  X << "\n")
+static uint64_t GLOBAL_LOOP_INDEX = 0;
+
+
+//  MY struct for holding loop info about the loops that i want to study
+class LoopCharacteristics {
+public:
+  LoopCharacteristics(Loop &L, ScalarEvolution &SE,
+                      const TargetTransformInfo &TTI,
+                      AssumptionCache &AC)
+      : ThisLoop(&L),
+        LoopIndex(GLOBAL_LOOP_INDEX++),
+        LoopDepth(L.getLoopDepth()),
+        HasParentLoop(L.getParentLoop() != nullptr),
+        LoopLocation(L.getLocStr()),
+        HasCanonicalIV(L.getCanonicalInductionVariable() != nullptr),
+        HasSEIV(L.getInductionVariable(SE) != nullptr),
+        IsGuarded(L.isGuarded()),
+        IsRotated(L.isRotatedForm()),
+        IsLoopSimplifyForm(L.isLoopSimplifyForm()),
+        IsAnnotatedParallel(L.isAnnotatedParallel()),
+        NumBlocks(L.getNumBlocks()),
+        NumSubLoops(L.getSubLoops().size()),
+        HasDedicatedExits(L.hasDedicatedExits()) {
+    auto Range = L.getLocRange();
+    StartLine = Range.getStart().getLine();
+    EndLine = Range.getEnd().getLine();
+
+    computeCFGCounts();
+    computeInstructionCounts();
+    computeHeaderPHIs();
+    computeInitialLoopSize(TTI, AC);
+    computeDensities();
+  }
+
+  void setTripInfo(unsigned TC, unsigned TM, unsigned BT = 0) {
+    TripCount = TC;
+    TripMultiple = TM;
+    BreakoutTrip = BT;
+  }
+
+  void print() const {
+    MY_DEBUG("Loop Index: " << LoopIndex);
+    MY_DEBUG("Loop Depth: " << LoopDepth);
+    MY_DEBUG("Has Parent Loop: " << (HasParentLoop ? "True" : "False"));
+    MY_DEBUG("Loop Location: " << LoopLocation);
+    MY_DEBUG("Loop Range: " << StartLine << " to " << EndLine);
+    MY_DEBUG("Canonical IV: " << (HasCanonicalIV ? "True" : "False"));
+    MY_DEBUG("SE IV Exists: " << (HasSEIV ? "True" : "False"));
+    MY_DEBUG("Is Guarded: " << (IsGuarded ? "True" : "False"));
+    MY_DEBUG("Is Rotated: " << (IsRotated ? "True" : "False"));
+    MY_DEBUG("Is Loop Simplify Form: " << (IsLoopSimplifyForm ? "True" : "False"));
+    MY_DEBUG("Is Annotated Parallel: " << (IsAnnotatedParallel ? "True" : "False"));
+    MY_DEBUG("Num Blocks: " << NumBlocks);
+    MY_DEBUG("Num SubLoops: " << NumSubLoops);
+    MY_DEBUG("Num Exit Blocks: " << NumExitBlocks);
+    MY_DEBUG("Num Exiting Blocks: " << NumExitingBlocks);
+    MY_DEBUG("Has Dedicated Exits: " << (HasDedicatedExits ? "True" : "False"));
+    MY_DEBUG("Num Header PHIs: " << NumHeaderPHIs);
+    MY_DEBUG("Total Instructions: " << TotalInstructions);
+    MY_DEBUG("Num Loads: " << NumLoads);
+    MY_DEBUG("Num Stores: " << NumStores);
+    MY_DEBUG("Num Branches: " << NumBranches);
+    MY_DEBUG("Num Calls: " << NumCalls);
+    MY_DEBUG("Num PHIs: " << NumPHIs);
+    MY_DEBUG("Num Int Ops: " << NumIntOps);
+    MY_DEBUG("Num Float Ops: " << NumFloatOps);
+    MY_DEBUG("Num ICmps: " << NumICmps);
+    MY_DEBUG("Num FCmps: " << NumFCmps);
+    MY_DEBUG("Initial Loop Size: " << InitialLoopSize);
+    MY_DEBUG("Load Density: " << LoadDensity);
+    MY_DEBUG("Store Density: " << StoreDensity);
+    MY_DEBUG("Branch Density: " << BranchDensity);
+    MY_DEBUG("Call Density: " << CallDensity);
+    MY_DEBUG("PHI Density: " << PHIDensity);
+    MY_DEBUG("Int Op Density: " << IntOpDensity);
+    MY_DEBUG("Float Op Density: " << FloatOpDensity);
+    MY_DEBUG("ICmp Density: " << ICmpDensity);
+    MY_DEBUG("FCmp Density: " << FCmpDensity);
+    MY_DEBUG("TripCount: " << TripCount);
+    MY_DEBUG("TripMultiple: " << TripMultiple);
+    MY_DEBUG("BreakoutTrip: " << BreakoutTrip);
+  }
+
+private:
+  Loop *ThisLoop = nullptr;
+
+  uint64_t LoopIndex = 0;
+  unsigned LoopDepth = 0;
+  bool HasParentLoop = false;
+  std::string LoopLocation = "<unknown>";
+  unsigned StartLine = 0;
+  unsigned EndLine = 0;
+
+  bool HasCanonicalIV = false;
+  bool HasSEIV = false;
+  bool IsGuarded = false;
+  bool IsRotated = false;
+  bool IsLoopSimplifyForm = false;
+  bool IsAnnotatedParallel = false;
+
+  unsigned NumBlocks = 0;
+  unsigned NumSubLoops = 0;
+  unsigned NumExitBlocks = 0;
+  unsigned NumExitingBlocks = 0;
+  bool HasDedicatedExits = false;
+  unsigned NumHeaderPHIs = 0;
+
+  unsigned TotalInstructions = 0;
+  unsigned NumLoads = 0;
+  unsigned NumStores = 0;
+  unsigned NumBranches = 0;
+  unsigned NumCalls = 0;
+  unsigned NumPHIs = 0;
+  unsigned NumIntOps = 0;
+  unsigned NumFloatOps = 0;
+  unsigned NumICmps = 0;
+  unsigned NumFCmps = 0;
+  unsigned InitialLoopSize = 0;
+
+  float LoadDensity = 0.0f;
+  float StoreDensity = 0.0f;
+  float BranchDensity = 0.0f;
+  float CallDensity = 0.0f;
+  float PHIDensity = 0.0f;
+  float IntOpDensity = 0.0f;
+  float FloatOpDensity = 0.0f;
+  float ICmpDensity = 0.0f;
+  float FCmpDensity = 0.0f;
+
+  unsigned TripCount = 0;
+  unsigned TripMultiple = 0;
+  unsigned BreakoutTrip = 0;
+
+  void computeCFGCounts() {
+    SmallVector<BasicBlock *, 8> Exits;
+    SmallVector<BasicBlock *, 8> Exiting;
+
+    ThisLoop->getExitBlocks(Exits);
+    ThisLoop->getExitingBlocks(Exiting);
+
+    NumExitBlocks = Exits.size();
+    NumExitingBlocks = Exiting.size();
+  }
+
+  void computeHeaderPHIs() {
+    for (PHINode &PN : ThisLoop->getHeader()->phis()) {
+      (void)PN;
+      ++NumHeaderPHIs;
+    }
+  }
+
+  void computeInstructionCounts() {
+    for (BasicBlock *BB : ThisLoop->blocks()) {
+      for (Instruction &I : *BB) {
+        ++TotalInstructions;
+
+        if (isa<LoadInst>(I)) ++NumLoads;
+        if (isa<StoreInst>(I)) ++NumStores;
+        if (I.isTerminator()) ++NumBranches;
+        if (isa<CallBase>(I)) ++NumCalls;
+        if (isa<PHINode>(I)) ++NumPHIs;
+        if (isa<ICmpInst>(I)) ++NumICmps;
+        if (isa<FCmpInst>(I)) ++NumFCmps;
+
+        if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
+          if (BO->getType()->isFloatingPointTy()) ++NumFloatOps;
+          else if (BO->getType()->isIntegerTy()) ++NumIntOps;
+        }
+      }
+    }
+  }
+
+  void computeInitialLoopSize(const TargetTransformInfo &TTI,
+                              AssumptionCache &AC) {
+    SmallPtrSet<const Value *, 32> EphValues;
+    CodeMetrics::collectEphemeralValues(ThisLoop, &AC, EphValues);
+    UnrollCostEstimator UCE(ThisLoop, TTI, EphValues, 0);
+    InitialLoopSize = UCE.getRolledLoopSize();
+  }
+
+  void computeDensities() {
+    if (TotalInstructions == 0) {
+      LoadDensity = StoreDensity = BranchDensity = CallDensity = PHIDensity =
+          IntOpDensity = FloatOpDensity = ICmpDensity = FCmpDensity = 0.0f;
+      return;
+    }
+
+    LoadDensity = static_cast<float>(NumLoads) / TotalInstructions;
+    StoreDensity = static_cast<float>(NumStores) / TotalInstructions;
+    BranchDensity = static_cast<float>(NumBranches) / TotalInstructions;
+    CallDensity = static_cast<float>(NumCalls) / TotalInstructions;
+    PHIDensity = static_cast<float>(NumPHIs) / TotalInstructions;
+    IntOpDensity = static_cast<float>(NumIntOps) / TotalInstructions;
+    FloatOpDensity = static_cast<float>(NumFloatOps) / TotalInstructions;
+    ICmpDensity = static_cast<float>(NumICmps) / TotalInstructions;
+    FCmpDensity = static_cast<float>(NumFCmps) / TotalInstructions;
+  }
+};
+
+static SmallVector<LoopCharacteristics, 128>
+    UNKNOWN_TRIP_LOOPS;
+
+
+//     MY HELPERS
+static LoopCharacteristics* collectUnknownTripLoop(Loop &L, ScalarEvolution &SE,
+                                   const TargetTransformInfo &TTI,
+                                   AssumptionCache &AC) {
+
+  unsigned TripCount = 0;
+  unsigned TripMultiple = 1;
+  unsigned BreakoutTrip = 0;
+
+  SmallVector<BasicBlock *, 8> ExitingBlocks;
+  L.getExitingBlocks(ExitingBlocks);
+
+  // Same exact-trip-count logic used by tryToUnrollLoop().
+  for (BasicBlock *ExitingBlock : ExitingBlocks) {
+    if (unsigned TC = SE.getSmallConstantTripCount(&L, ExitingBlock)) {
+      if (!TripCount || TC < TripCount)
+        TripCount = TripMultiple = TC;
+    }
+  }
+
+  // If exact trip count is known, this loop is out of scope.
+  if (TripCount != 0)
+    return nullptr;
+
+  // Same fallback logic used by tryToUnrollLoop() for unknown exact trip count.
+  BasicBlock *ExitingBlock = L.getLoopLatch();
+  if (!ExitingBlock || !L.isLoopExiting(ExitingBlock))
+    ExitingBlock = L.getExitingBlock();
+
+  if (ExitingBlock)
+    TripMultiple = SE.getSmallConstantTripMultiple(&L, ExitingBlock);
+
+  LoopCharacteristics* LC = new LoopCharacteristics(L, SE, TTI, AC);
+  LC->setTripInfo(TripCount, TripMultiple, BreakoutTrip);
+
+  return LC;
+}
+
+static void addToGlobalLoopList(LoopCharacteristics* LC){
+  UNKNOWN_TRIP_LOOPS.push_back(*LC);
+  delete LC;
+}
+
+
+#define INVALIDATE_LOOP if(loopValid != nullptr) *loopValid = false
+
+static LoopUnrollResult
+myTryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
+                  ScalarEvolution &SE, const TargetTransformInfo &TTI,
+                  AssumptionCache &AC, OptimizationRemarkEmitter &ORE,
+                  BlockFrequencyInfo *BFI, ProfileSummaryInfo *PSI,
+                  bool PreserveLCSSA, bool ForgetAllSCEV,
+                  unsigned ForcedCount,
+                  std::optional<bool> ProvidedAllowPeeling,
+                  AAResults *AA = nullptr,
+                  bool* loopValid = nullptr) {
+
+  LLVM_DEBUG(dbgs() << "MY Forced Loop Unroll: F["
+                    << L->getHeader()->getParent()->getName() << "] Loop %"
+                    << L->getHeader()->getName()
+                    << " (depth=" << L->getLoopDepth() << ")\n");
+
+  if (ForcedCount == 0) {
+    LLVM_DEBUG(dbgs() << "  Invalid forced count 0.\n");
+    INVALIDATE_LOOP;
+    return LoopUnrollResult::Unmodified;
+  }
+
+  TransformationMode TM = hasUnrollTransformation(L);
+  if (TM & TM_Disable) {
+    LLVM_DEBUG(dbgs().indent(1)
+               << "Not unrolling: transformation disabled by metadata.\n");
+    INVALIDATE_LOOP;
+    return LoopUnrollResult::Unmodified;
+  }
+
+  Loop *ParentL = L->getParentLoop();
+  if (ParentL != nullptr &&
+      hasUnrollAndJamTransformation(ParentL) == TM_ForcedByUser &&
+      hasUnrollTransformation(L) != TM_ForcedByUser) {
+    LLVM_DEBUG(dbgs().indent(1)
+               << "Not unrolling loop since parent loop has llvm.loop.unroll_and_jam.\n");
+    INVALIDATE_LOOP;
+    return LoopUnrollResult::Unmodified;
+  }
+
+  if (hasUnrollAndJamTransformation(L) == TM_ForcedByUser &&
+      hasUnrollTransformation(L) != TM_ForcedByUser) {
+    LLVM_DEBUG(dbgs().indent(1)
+               << "Not unrolling loop since it has llvm.loop.unroll_and_jam.\n");
+    INVALIDATE_LOOP;
+    return LoopUnrollResult::Unmodified;
+  }
+
+  if (!L->isLoopSimplifyForm()) {
+    LLVM_DEBUG(dbgs().indent(1)
+               << "Not unrolling loop which is not in loop-simplify form.\n");
+    INVALIDATE_LOOP;
+    return LoopUnrollResult::Unmodified;
+  }
+
+  SmallPtrSet<const Value *, 32> EphValues;
+  CodeMetrics::collectEphemeralValues(L, &AC, EphValues);
+
+  // Use BEInsns = 0 here unless you want to plumb in preferences.
+  UnrollCostEstimator UCE(L, TTI, EphValues, /*BEInsns=*/0);
+  if (!UCE.canUnroll())
+    return LoopUnrollResult::Unmodified;
+
+  if (UCE.NumInlineCandidates != 0) {
+    LLVM_DEBUG(dbgs().indent(1)
+               << "Not unrolling loop with inlinable calls.\n");
+    INVALIDATE_LOOP;
+    return LoopUnrollResult::Unmodified;
+  }
+
+  unsigned TripCount = 0;
+  unsigned TripMultiple = 1;
+  SmallVector<BasicBlock *, 8> ExitingBlocks;
+  L->getExitingBlocks(ExitingBlocks);
+  for (BasicBlock *ExitingBlock : ExitingBlocks)
+    if (unsigned TC = SE.getSmallConstantTripCount(L, ExitingBlock))
+      if (!TripCount || TC < TripCount)
+        TripCount = TripMultiple = TC;
+
+  if (!TripCount) {
+    BasicBlock *ExitingBlock = L->getLoopLatch();
+    if (!ExitingBlock || !L->isLoopExiting(ExitingBlock))
+      ExitingBlock = L->getExitingBlock();
+    if (ExitingBlock)
+      TripMultiple = SE.getSmallConstantTripMultiple(L, ExitingBlock);
+  }
+
+  unsigned MaxTripCount = 0;
+  bool MaxOrZero = false;
+  if (!TripCount) {
+    MaxTripCount = SE.getSmallConstantMaxTripCount(L);
+    MaxOrZero = SE.isBackedgeTakenCountMaxOrZero(L);
+  }
+
+  LLVM_DEBUG(dbgs() << "Forced count = " << ForcedCount
+                    << ", TripCount = " << TripCount
+                    << ", MaxTripCount = " << MaxTripCount
+                    << ", TripMultiple = " << TripMultiple << "\n");
+
+  // Optional: keep peel logic disabled for clean benchmarking.
+  TargetTransformInfo::PeelingPreferences PP = gatherPeelingPreferences(
+      L, SE, TTI, ProvidedAllowPeeling,
+      /*ProvidedAllowProfileBasedPeeling=*/false, true);
+
+  if (PP.PeelCount) {
+    LLVM_DEBUG(dbgs().indent(1)
+               << "Skipping forced unroll because loop would be peeled first.\n");
+    INVALIDATE_LOOP;
+    return LoopUnrollResult::Unmodified;
+  }
+
+  // Build explicit forced unroll options.
+  UnrollLoopOptions ULO;
+  ULO.Count = ForcedCount;
+  ULO.Force = true;
+  ULO.AllowExpensiveTripCount = true;
+  ULO.UnrollRemainder = true;
+
+  // For unknown-trip-count loops, this is the key switch.
+  ULO.Runtime = (TripCount == 0);
+
+  ULO.ForgetAllSCEV = ForgetAllSCEV;
+  ULO.Heart = getLoopConvergenceHeart(L);
+  ULO.SCEVExpansionBudget = 8;
+  ULO.RuntimeUnrollMultiExit = false;
+  ULO.AddAdditionalAccumulators = false;
+
+  // Match tryToUnrollLoop behavior: if runtime mode is only needed when
+  // the trip multiple does not divide the forced count, tighten it here.
+  ULO.Runtime &= (TripCount == 0 && (TripMultiple % ForcedCount != 0));
+
+  MDNode *OrigLoopID = L->getLoopID();
+  UnrollPragmaInfo PInfo(L);
+
+  Loop *RemainderLoop = nullptr;
+  LoopUnrollResult UnrollResult = UnrollLoop(
+      L, ULO, LI, &SE, &DT, &AC, &TTI, &ORE,
+      PreserveLCSSA, &RemainderLoop, AA);
+
+  if (UnrollResult == LoopUnrollResult::Unmodified)
+    return LoopUnrollResult::Unmodified;
+
+  if (RemainderLoop) {
+    std::optional<MDNode *> RemainderLoopID =
+        makeFollowupLoopID(OrigLoopID, {LLVMLoopUnrollFollowupAll,
+                                        LLVMLoopUnrollFollowupRemainder});
+    if (RemainderLoopID)
+      RemainderLoop->setLoopID(*RemainderLoopID);
+  }
+
+  if (UnrollResult != LoopUnrollResult::FullyUnrolled) {
+    std::optional<MDNode *> NewLoopID =
+        makeFollowupLoopID(OrigLoopID, {LLVMLoopUnrollFollowupAll,
+                                        LLVMLoopUnrollFollowupUnrolled});
+    if (NewLoopID) {
+      L->setLoopID(*NewLoopID);
+      return UnrollResult;
+    }
+  }
+
+  if (UnrollResult != LoopUnrollResult::FullyUnrolled && PInfo.ExplicitUnroll)
+    L->setLoopAlreadyUnrolled();
+
+  return UnrollResult;
+}
+
+
 
 cl::opt<bool> llvm::ForgetSCEVInLoopUnroll(
     "forget-scev-loop-unroll", cl::init(false), cl::Hidden,
@@ -1479,7 +1906,6 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
 
   return UnrollResult;
 }
-
 namespace {
 
 class LoopUnroll : public LoopPass {
@@ -1528,6 +1954,7 @@ public:
   }
 
   bool runOnLoop(Loop *L, LPPassManager &LPM) override {
+    assert(false);    // Make sure we dont use this
     if (skipLoop(L))
       return false;
 
@@ -1596,9 +2023,12 @@ Pass *llvm::createLoopUnrollPass(int OptLevel, bool OnlyWhenForced,
       AllowPeeling == -1 ? std::nullopt : std::optional<bool>(AllowPeeling));
 }
 
+
 PreservedAnalyses LoopFullUnrollPass::run(Loop &L, LoopAnalysisManager &AM,
                                           LoopStandardAnalysisResults &AR,
                                           LPMUpdater &Updater) {
+
+
   // For the new PM, we can't use OptimizationRemarkEmitter as an analysis
   // pass. Function analyses need to be preserved across loop transformations
   // but ORE cannot be preserved (see comment before the pass definition).
@@ -1684,6 +2114,7 @@ PreservedAnalyses LoopFullUnrollPass::run(Loop &L, LoopAnalysisManager &AM,
 
 PreservedAnalyses LoopUnrollPass::run(Function &F,
                                       FunctionAnalysisManager &AM) {
+
   auto &LI = AM.getResult<LoopAnalysis>(F);
   // There are no loops in the function. Return before computing other expensive
   // analyses.
@@ -1741,9 +2172,36 @@ PreservedAnalyses LoopUnrollPass::run(Function &F,
     if (PSI && PSI->hasHugeWorkingSetSize())
       LocalAllowPeeling = false;
     std::string LoopName = std::string(L.getName());
-    // The API here is quite complex to call and we allow to select some
-    // flavors of unrolling during construction time (by setting UnrollOpts).
-    LoopUnrollResult Result = tryToUnrollLoop(
+
+    // Here I collect my loop data for loops that dont have a set trip count
+    // If the given loop has unknown trip count, I'll use my own tryToUnroll function
+    // that will use a pre selected unroll factor 
+    LoopUnrollResult Result;
+    LoopCharacteristics* LoopData = collectUnknownTripLoop(L, SE, TTI, AC);
+    if (LoopData){
+      bool validLoop = true;
+      Result = myTryToUnrollLoop(
+        &L, DT, &LI, SE, TTI, AC, ORE, BFI, PSI,
+        /*PreserveLCSSA*/ true,
+        UnrollOpts.ForgetSCEV,
+        PRESET_LOOP_UNROLL_FACTOR_FOR_UNKNOWN_TRIP_COUNT,
+        /*ProvidedAllowPeeling=*/false,
+        &AA,
+        &validLoop);
+
+      if (validLoop){
+        LoopData->print();
+        addToGlobalLoopList(LoopData);
+      }
+
+      else{
+        delete LoopData;
+      }
+    }
+    else{
+      // The API here is quite complex to call and we allow to select some
+      // flavors of unrolling during construction time (by setting UnrollOpts).
+      Result = tryToUnrollLoop(
         &L, DT, &LI, SE, TTI, AC, ORE, BFI, PSI,
         /*PreserveLCSSA*/ true, UnrollOpts.OptLevel, /*OnlyFullUnroll*/ false,
         UnrollOpts.OnlyWhenForced, UnrollOpts.ForgetSCEV,
@@ -1752,6 +2210,9 @@ PreservedAnalyses LoopUnrollPass::run(Function &F,
         UnrollOpts.AllowRuntime, UnrollOpts.AllowUpperBound, LocalAllowPeeling,
         UnrollOpts.AllowProfileBasedPeeling, UnrollOpts.FullUnrollMaxCount,
         &AA);
+    }
+
+
     Changed |= Result != LoopUnrollResult::Unmodified;
 
     // The parent must not be damaged by unrolling!
@@ -1792,3 +2253,5 @@ void LoopUnrollPass::printPipeline(
   OS << 'O' << UnrollOpts.OptLevel;
   OS << '>';
 }
+
+
