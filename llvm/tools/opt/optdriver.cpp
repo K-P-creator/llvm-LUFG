@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "myGlobals.h"  // Include our custom global variable and CLI argument parser
+
 #include "NewPMDriver.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
@@ -393,6 +395,114 @@ static bool shouldForceLegacyPM() {
   return false;
 }
 
+
+
+unsigned MyForcedFactor = 0;
+unsigned MyHotLoopIndex = 0;
+bool DataGatherMode = false;  // If true, we are in data gathering mode and should not perform actual unrolling (i.e., unroll factor should be 1 for all loops).
+
+static void extractMyForcedFactorArg(int &argc, char **argv) {
+  int writeIdx = 1; // keep argv[0]
+  bool found = false;
+
+  for (int readIdx = 1; readIdx < argc; ++readIdx) {
+    StringRef Arg(argv[readIdx]);
+
+    // Form: --my-unroll-factor=4
+    if (Arg.consume_front("--my-unroll-factor=")) {
+      unsigned Value = 0;
+      if (Arg.getAsInteger(10, Value)) {
+        errs() << "Invalid value for --my-unroll-factor\n";
+        exit(1);
+      }
+      MyForcedFactor = Value;
+      found = true;
+      continue;
+    }
+
+    // Form: --my-unroll-factor 4
+    if (Arg == "--my-unroll-factor") {
+      if (readIdx + 1 >= argc) {
+        errs() << "Missing value for --my-unroll-factor\n";
+        exit(1);
+      }
+
+      StringRef ValueStr(argv[++readIdx]);
+      unsigned Value = 0;
+      if (ValueStr.getAsInteger(10, Value)) {
+        errs() << "Invalid value for --my-unroll-factor\n";
+        exit(1);
+      }
+      MyForcedFactor = Value;
+      continue;
+    }
+
+    // Keep all other args
+    argv[writeIdx++] = argv[readIdx];
+  }
+
+  if (!found){
+      errs() << "Missing required CLI argument: --my-unroll-factor\n";
+      exit(1);
+    }
+  
+  argc = writeIdx;
+}
+
+
+static void extractMyHotLoopIndexArg(int &argc, char **argv) {
+  int writeIdx = 1; // keep argv[0]
+  bool found = false;
+
+  for (int readIdx = 1; readIdx < argc; ++readIdx) {
+    StringRef Arg(argv[readIdx]);
+
+    // Form: --my-unroll-factor=4
+    if (Arg.consume_front("--my-hot-loop-index=")) {
+      unsigned Value = 0;
+      if (Arg.getAsInteger(10, Value)) {
+        errs() << "Invalid value for --my-hot-loop-index\n";
+        exit(1);
+      }
+      MyHotLoopIndex = Value;
+      found = true;
+      continue;
+    }
+
+    // Form: --my-unroll-factor 4
+    if (Arg == "--my-hot-loop-index") {
+      if (readIdx + 1 >= argc) {
+        errs() << "Missing value for --my-hot-loop-index\n";
+        exit(1);
+      }
+
+      StringRef ValueStr(argv[++readIdx]);
+      unsigned Value = 0;
+      if (ValueStr.getAsInteger(10, Value)) {
+        errs() << "Invalid value for --my-hot-loop-index\n";
+        exit(1);
+      }
+      MyHotLoopIndex = Value;
+      continue;
+    }
+
+    // Keep all other args
+    argv[writeIdx++] = argv[readIdx];
+  }
+
+  if (!found){
+      errs() << "Missing required CLI argument: --my-hot-loop-index\n";
+      exit(1);
+    }
+
+  if (MyHotLoopIndex == 0){
+      DataGatherMode = true;
+    }
+  
+  argc = writeIdx;
+}
+
+
 //===----------------------------------------------------------------------===//
 // main for opt
 //
@@ -454,6 +564,9 @@ optMain(int argc, char **argv,
 
   // Register the Target and CPU printer for --version.
   cl::AddExtraVersionPrinter(sys::printDefaultTargetAndDetectedCPU);
+
+  extractMyForcedFactorArg(argc, argv);    // Extract our custom CLI argument and adjust argc/argv
+  extractMyHotLoopIndexArg(argc, argv);    // Extract our custom CLI argument and
 
   cl::ParseCommandLineOptions(
       argc, argv, "llvm .bc -> .bc modular optimizer and analysis printer\n");

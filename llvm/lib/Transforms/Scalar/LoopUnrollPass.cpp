@@ -1,4 +1,3 @@
-#define PRESET_LOOP_UNROLL_FACTOR_FOR_UNKNOWN_TRIP_COUNT 2
 //===- LoopUnroll.cpp - Loop unroller pass --------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -68,6 +67,8 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 
+#include "../../../tools/opt/myGlobals.h"  // Include our custom global variable and CLI argument parser
+
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -82,7 +83,7 @@ using namespace llvm;
 #define DEBUG_TYPE "loop-unroll"
 
 #define MY_DEBUG(X) LLVM_DEBUG(dbgs() << "MY_DEBUG: " <<  X << "\n")
-static uint64_t GLOBAL_LOOP_INDEX = 0;
+static uint64_t GLOBAL_LOOP_INDEX = 1;
 
 
 //  MY struct for holding loop info about the loops that i want to study
@@ -164,11 +165,12 @@ public:
     MY_DEBUG("TripMultiple: " << TripMultiple);
     MY_DEBUG("BreakoutTrip: " << BreakoutTrip);
   }
-
+  
+  bool ValidLoop = true;
+  uint64_t LoopIndex;
 private:
   Loop *ThisLoop = nullptr;
 
-  uint64_t LoopIndex = 0;
   unsigned LoopDepth = 0;
   bool HasParentLoop = false;
   std::string LoopLocation = "<unknown>";
@@ -214,6 +216,10 @@ private:
   unsigned TripCount = 0;
   unsigned TripMultiple = 0;
   unsigned BreakoutTrip = 0;
+
+  //  Set in MyTryToUnrollLoop()
+  bool UsedRutimeUnroll = false;
+  bool UsedRemainder = false;
 
   void computeCFGCounts() {
     SmallVector<BasicBlock *, 8> Exits;
@@ -281,7 +287,7 @@ private:
   }
 };
 
-static SmallVector<LoopCharacteristics, 128>
+static std::vector<LoopCharacteristics>
     UNKNOWN_TRIP_LOOPS;
 
 
@@ -329,7 +335,7 @@ static void addToGlobalLoopList(LoopCharacteristics* LC){
 }
 
 
-#define INVALIDATE_LOOP if(loopValid != nullptr) *loopValid = false
+#define INVALIDATE_LOOP if(LoopData != nullptr) LoopData->ValidLoop = false
 
 static LoopUnrollResult
 myTryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
@@ -340,7 +346,7 @@ myTryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
                   unsigned ForcedCount,
                   std::optional<bool> ProvidedAllowPeeling,
                   AAResults *AA = nullptr,
-                  bool* loopValid = nullptr) {
+                  LoopCharacteristics* LoopData = nullptr) {
 
   LLVM_DEBUG(dbgs() << "MY Forced Loop Unroll: F["
                     << L->getHeader()->getParent()->getName() << "] Loop %"
@@ -419,10 +425,9 @@ myTryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
   }
 
   unsigned MaxTripCount = 0;
-  bool MaxOrZero = false;
+
   if (!TripCount) {
     MaxTripCount = SE.getSmallConstantMaxTripCount(L);
-    MaxOrZero = SE.isBackedgeTakenCountMaxOrZero(L);
   }
 
   LLVM_DEBUG(dbgs() << "Forced count = " << ForcedCount
@@ -468,7 +473,7 @@ myTryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
   Loop *RemainderLoop = nullptr;
   LoopUnrollResult UnrollResult = UnrollLoop(
       L, ULO, LI, &SE, &DT, &AC, &TTI, &ORE,
-      PreserveLCSSA, &RemainderLoop, AA);
+      PreserveLCSSA, &RemainderLoop, AA, &LoopData->ValidLoop);
 
   if (UnrollResult == LoopUnrollResult::Unmodified)
     return LoopUnrollResult::Unmodified;
@@ -2179,17 +2184,21 @@ PreservedAnalyses LoopUnrollPass::run(Function &F,
     LoopUnrollResult Result;
     LoopCharacteristics* LoopData = collectUnknownTripLoop(L, SE, TTI, AC);
     if (LoopData){
-      bool validLoop = true;
+      unsigned UnrollFactor;
+      if (DataGatherMode)        UnrollFactor = 1;
+      else
+        UnrollFactor = (LoopData->LoopIndex == MyHotLoopIndex ? MyForcedFactor : 1);
+
       Result = myTryToUnrollLoop(
         &L, DT, &LI, SE, TTI, AC, ORE, BFI, PSI,
         /*PreserveLCSSA*/ true,
         UnrollOpts.ForgetSCEV,
-        PRESET_LOOP_UNROLL_FACTOR_FOR_UNKNOWN_TRIP_COUNT,
+        UnrollFactor,   // Unroll by the forced factor for the hot loop, and do not unroll other loops.
         /*ProvidedAllowPeeling=*/false,
         &AA,
-        &validLoop);
+        LoopData);
 
-      if (validLoop){
+      if (LoopData->ValidLoop){
         LoopData->print();
         addToGlobalLoopList(LoopData);
       }
