@@ -66,6 +66,7 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include <iostream>
 
 #include "../../../tools/opt/myGlobals.h"  // Include our custom global variable and CLI argument parser
 
@@ -92,8 +93,8 @@ public:
   LoopCharacteristics(Loop &L, ScalarEvolution &SE,
                       const TargetTransformInfo &TTI,
                       AssumptionCache &AC)
-      : ThisLoop(&L),
-        LoopIndex(GLOBAL_LOOP_INDEX++),
+      : LoopIndex(GLOBAL_LOOP_INDEX++),
+        ThisLoop(&L),
         LoopDepth(L.getLoopDepth()),
         HasParentLoop(L.getParentLoop() != nullptr),
         LoopLocation(L.getLocStr()),
@@ -124,46 +125,46 @@ public:
   }
 
   void print() const {
-    MY_DEBUG("Loop Index: " << LoopIndex);
-    MY_DEBUG("Loop Depth: " << LoopDepth);
-    MY_DEBUG("Has Parent Loop: " << (HasParentLoop ? "True" : "False"));
-    MY_DEBUG("Loop Location: " << LoopLocation);
-    MY_DEBUG("Loop Range: " << StartLine << " to " << EndLine);
-    MY_DEBUG("Canonical IV: " << (HasCanonicalIV ? "True" : "False"));
-    MY_DEBUG("SE IV Exists: " << (HasSEIV ? "True" : "False"));
-    MY_DEBUG("Is Guarded: " << (IsGuarded ? "True" : "False"));
-    MY_DEBUG("Is Rotated: " << (IsRotated ? "True" : "False"));
-    MY_DEBUG("Is Loop Simplify Form: " << (IsLoopSimplifyForm ? "True" : "False"));
-    MY_DEBUG("Is Annotated Parallel: " << (IsAnnotatedParallel ? "True" : "False"));
-    MY_DEBUG("Num Blocks: " << NumBlocks);
-    MY_DEBUG("Num SubLoops: " << NumSubLoops);
-    MY_DEBUG("Num Exit Blocks: " << NumExitBlocks);
-    MY_DEBUG("Num Exiting Blocks: " << NumExitingBlocks);
-    MY_DEBUG("Has Dedicated Exits: " << (HasDedicatedExits ? "True" : "False"));
-    MY_DEBUG("Num Header PHIs: " << NumHeaderPHIs);
-    MY_DEBUG("Total Instructions: " << TotalInstructions);
-    MY_DEBUG("Num Loads: " << NumLoads);
-    MY_DEBUG("Num Stores: " << NumStores);
-    MY_DEBUG("Num Branches: " << NumBranches);
-    MY_DEBUG("Num Calls: " << NumCalls);
-    MY_DEBUG("Num PHIs: " << NumPHIs);
-    MY_DEBUG("Num Int Ops: " << NumIntOps);
-    MY_DEBUG("Num Float Ops: " << NumFloatOps);
-    MY_DEBUG("Num ICmps: " << NumICmps);
-    MY_DEBUG("Num FCmps: " << NumFCmps);
-    MY_DEBUG("Initial Loop Size: " << InitialLoopSize);
-    MY_DEBUG("Load Density: " << LoadDensity);
-    MY_DEBUG("Store Density: " << StoreDensity);
-    MY_DEBUG("Branch Density: " << BranchDensity);
-    MY_DEBUG("Call Density: " << CallDensity);
-    MY_DEBUG("PHI Density: " << PHIDensity);
-    MY_DEBUG("Int Op Density: " << IntOpDensity);
-    MY_DEBUG("Float Op Density: " << FloatOpDensity);
-    MY_DEBUG("ICmp Density: " << ICmpDensity);
-    MY_DEBUG("FCmp Density: " << FCmpDensity);
-    MY_DEBUG("TripCount: " << TripCount);
-    MY_DEBUG("TripMultiple: " << TripMultiple);
-    MY_DEBUG("BreakoutTrip: " << BreakoutTrip);
+    std::cout << "Loop Index: " << LoopIndex << std::endl;
+    std::cout << "Loop Depth: " << LoopDepth << std::endl;
+    std::cout << "Has Parent Loop: " << (HasParentLoop ? "True" : "False") << std::endl;
+    std::cout << "Loop Location: " << LoopLocation << std::endl;
+    std::cout << "Loop Range: " << StartLine << " to " << EndLine << std::endl;
+    std::cout << "Canonical IV: " << (HasCanonicalIV ? "True" : "False") << std::endl;
+    std::cout << "SE IV Exists: " << (HasSEIV ? "True" : "False") << std::endl;
+    std::cout << "Is Guarded: " << (IsGuarded ? "True" : "False") << std::endl;
+    std::cout << "Is Rotated: " << (IsRotated ? "True" : "False") << std::endl;
+    std::cout << "Is Loop Simplify Form: " << (IsLoopSimplifyForm ? "True" : "False") << std::endl;
+    std::cout << "Is Annotated Parallel: " << (IsAnnotatedParallel ? "True" : "False") << std::endl;
+    std::cout << "Num Blocks: " << NumBlocks << std::endl;
+    std::cout << "Num SubLoops: " << NumSubLoops << std::endl;
+    std::cout << "Num Exit Blocks: " << NumExitBlocks << std::endl;
+    std::cout << "Num Exiting Blocks: " << NumExitingBlocks << std::endl;
+    std::cout << "Has Dedicated Exits: " << (HasDedicatedExits ? "True" : "False") << std::endl;
+    std::cout << "Num Header PHIs: " << NumHeaderPHIs << std::endl;
+    std::cout << "Total Instructions: " << TotalInstructions << std::endl;
+    std::cout << "Num Loads: " << NumLoads << std::endl;
+    std::cout << "Num Stores: " << NumStores << std::endl;
+    std::cout << "Num Branches: " << NumBranches << std::endl;
+    std::cout << "Num Calls: " << NumCalls << std::endl;
+    std::cout << "Num PHIs: " << NumPHIs << std::endl;
+    std::cout << "Num Int Ops: " << NumIntOps << std::endl;
+    std::cout << "Num Float Ops: " << NumFloatOps << std::endl;
+    std::cout << "Num ICmps: " << NumICmps << std::endl;
+    std::cout << "Num FCmps: " << NumFCmps << std::endl;
+    std::cout << "Initial Loop Size: " << InitialLoopSize << std::endl;
+    std::cout << "Load Density: " << LoadDensity << std::endl;
+    std::cout << "Store Density: " << StoreDensity << std::endl;
+    std::cout << "Branch Density: " << BranchDensity << std::endl;
+    std::cout << "Call Density: " << CallDensity << std::endl;
+    std::cout << "PHI Density: " << PHIDensity << std::endl;
+    std::cout << "Int Op Density: " << IntOpDensity << std::endl;
+    std::cout << "Float Op Density: " << FloatOpDensity << std::endl;
+    std::cout << "ICmp Density: " << ICmpDensity << std::endl;
+    std::cout << "FCmp Density: " << FCmpDensity << std::endl;
+    std::cout << "TripCount: " << TripCount << std::endl;
+    std::cout << "TripMultiple: " << TripMultiple << std::endl;
+    std::cout << "BreakoutTrip: " << BreakoutTrip << std::endl;
   }
   
   bool ValidLoop = true;
@@ -216,10 +217,6 @@ private:
   unsigned TripCount = 0;
   unsigned TripMultiple = 0;
   unsigned BreakoutTrip = 0;
-
-  //  Set in MyTryToUnrollLoop()
-  bool UsedRutimeUnroll = false;
-  bool UsedRemainder = false;
 
   void computeCFGCounts() {
     SmallVector<BasicBlock *, 8> Exits;
@@ -2199,7 +2196,7 @@ PreservedAnalyses LoopUnrollPass::run(Function &F,
         LoopData);
 
       if (LoopData->ValidLoop){
-        LoopData->print();
+        //LoopData->print();
         addToGlobalLoopList(LoopData);
       }
 
@@ -2235,8 +2232,19 @@ PreservedAnalyses LoopUnrollPass::run(Function &F,
       LAM->clear(L, LoopName);
   }
 
+  if (DataGatherMode){
+    
+    // Print the collected data for all loops after processing the function.
+    std::cout << std::endl << "Loop Count: " << UNKNOWN_TRIP_LOOPS.size() << std::endl << std::endl;
+    std::cout << "Collected Loop Data:" << std::endl;
+    for (const auto& LoopData : UNKNOWN_TRIP_LOOPS) {
+      LoopData.print();
+    }
+  }
+
   if (!Changed)
     return PreservedAnalyses::all();
+    
 
   return getLoopPassPreservedAnalyses();
 }
