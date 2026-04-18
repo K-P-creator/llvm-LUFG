@@ -10,3 +10,8 @@ Modified files here include
 
 llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp
 
+After building the whole project, use:
+
+`cmake --build build --target opt -j8`
+
+when making changes to the opt stage.

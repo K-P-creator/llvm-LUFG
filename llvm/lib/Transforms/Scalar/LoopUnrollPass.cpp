@@ -78,6 +78,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <string>
 
 using namespace llvm;
 
@@ -165,6 +166,7 @@ public:
     std::cout << "TripCount: " << TripCount << std::endl;
     std::cout << "TripMultiple: " << TripMultiple << std::endl;
     std::cout << "BreakoutTrip: " << BreakoutTrip << std::endl;
+    std::cout << "LoopInstructionOrdering: " << LoopInstructionOrdering << std::endl;
   }
   
   bool ValidLoop = true;
@@ -218,6 +220,8 @@ private:
   unsigned TripMultiple = 0;
   unsigned BreakoutTrip = 0;
 
+  std::string LoopInstructionOrdering = "";
+
   void computeCFGCounts() {
     SmallVector<BasicBlock *, 8> Exits;
     SmallVector<BasicBlock *, 8> Exiting;
@@ -236,26 +240,56 @@ private:
     }
   }
 
-  void computeInstructionCounts() {
-    for (BasicBlock *BB : ThisLoop->blocks()) {
-      for (Instruction &I : *BB) {
-        ++TotalInstructions;
+void computeInstructionCounts() {
+  for (BasicBlock *BB : ThisLoop->blocks()) {
+    for (Instruction &I : *BB) {
+      ++TotalInstructions;
 
-        if (isa<LoadInst>(I)) ++NumLoads;
-        if (isa<StoreInst>(I)) ++NumStores;
-        if (I.isTerminator()) ++NumBranches;
-        if (isa<CallBase>(I)) ++NumCalls;
-        if (isa<PHINode>(I)) ++NumPHIs;
-        if (isa<ICmpInst>(I)) ++NumICmps;
-        if (isa<FCmpInst>(I)) ++NumFCmps;
+      char token = 'O';  // default: Other
 
-        if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
-          if (BO->getType()->isFloatingPointTy()) ++NumFloatOps;
-          else if (BO->getType()->isIntegerTy()) ++NumIntOps;
+      if (isa<PHINode>(I)) {
+        ++NumPHIs;
+        token = 'P';
+      }
+      else if (isa<LoadInst>(I)) {
+        ++NumLoads;
+        token = 'L';
+      }
+      else if (isa<StoreInst>(I)) {
+        ++NumStores;
+        token = 'S';
+      }
+      else if (I.isTerminator()) {
+        ++NumBranches;
+        token = 'B';
+      }
+      else if (isa<CallBase>(I)) {
+        ++NumCalls;
+        token = 'C';
+      }
+      else if (isa<ICmpInst>(I)) {
+        ++NumICmps;
+        token = 'I';
+      }
+      else if (isa<FCmpInst>(I)) {
+        ++NumFCmps;
+        token = 'F';
+      }
+      else if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
+        if (BO->getType()->isFloatingPointTy()) {
+          ++NumFloatOps;
+          token = 'A';   // Arithmetic float
+        }
+        else if (BO->getType()->isIntegerTy()) {
+          ++NumIntOps;
+          token = 'R';   // aRithmetic int
         }
       }
+
+      LoopInstructionOrdering += token;
     }
   }
+}
 
   void computeInitialLoopSize(const TargetTransformInfo &TTI,
                               AssumptionCache &AC) {
