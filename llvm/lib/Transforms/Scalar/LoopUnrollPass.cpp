@@ -146,6 +146,7 @@ public:
     std::cout << "Total Instructions: " << TotalInstructions << std::endl;
     std::cout << "Num Loads: " << NumLoads << std::endl;
     std::cout << "Num Stores: " << NumStores << std::endl;
+    std::cout << "Num GetElementPtrs: " << NumGetElemPtrs << std::endl;    
     std::cout << "Num Branches: " << NumBranches << std::endl;
     std::cout << "Num Calls: " << NumCalls << std::endl;
     std::cout << "Num PHIs: " << NumPHIs << std::endl;
@@ -156,6 +157,7 @@ public:
     std::cout << "Initial Loop Size: " << InitialLoopSize << std::endl;
     std::cout << "Load Density: " << LoadDensity << std::endl;
     std::cout << "Store Density: " << StoreDensity << std::endl;
+    std::cout << "GetElementPtr Density: " << GetElementPtrDensity << std::endl;
     std::cout << "Branch Density: " << BranchDensity << std::endl;
     std::cout << "Call Density: " << CallDensity << std::endl;
     std::cout << "PHI Density: " << PHIDensity << std::endl;
@@ -197,6 +199,7 @@ private:
   unsigned TotalInstructions = 0;
   unsigned NumLoads = 0;
   unsigned NumStores = 0;
+  unsigned NumGetElemPtrs = 0;
   unsigned NumBranches = 0;
   unsigned NumCalls = 0;
   unsigned NumPHIs = 0;
@@ -210,6 +213,7 @@ private:
   float StoreDensity = 0.0f;
   float BranchDensity = 0.0f;
   float CallDensity = 0.0f;
+  float GetElementPtrDensity = 0.0f;
   float PHIDensity = 0.0f;
   float IntOpDensity = 0.0f;
   float FloatOpDensity = 0.0f;
@@ -259,6 +263,10 @@ void computeInstructionCounts() {
         ++NumStores;
         token = 'S';
       }
+      else if (isa<GetElementPtrInst>(I)) {
+        ++NumGetElemPtrs;
+        token = 'G';
+      }
       else if (I.isTerminator()) {
         ++NumBranches;
         token = 'B';
@@ -289,6 +297,7 @@ void computeInstructionCounts() {
       LoopInstructionOrdering += token;
     }
   }
+  assert (LoopInstructionOrdering.length() == TotalInstructions);
 }
 
   void computeInitialLoopSize(const TargetTransformInfo &TTI,
@@ -301,13 +310,12 @@ void computeInstructionCounts() {
 
   void computeDensities() {
     if (TotalInstructions == 0) {
-      LoadDensity = StoreDensity = BranchDensity = CallDensity = PHIDensity =
-          IntOpDensity = FloatOpDensity = ICmpDensity = FCmpDensity = 0.0f;
       return;
     }
 
     LoadDensity = static_cast<float>(NumLoads) / TotalInstructions;
     StoreDensity = static_cast<float>(NumStores) / TotalInstructions;
+    GetElementPtrDensity = static_cast<float>(NumGetElemPtrs) / TotalInstructions;
     BranchDensity = static_cast<float>(NumBranches) / TotalInstructions;
     CallDensity = static_cast<float>(NumCalls) / TotalInstructions;
     PHIDensity = static_cast<float>(NumPHIs) / TotalInstructions;
